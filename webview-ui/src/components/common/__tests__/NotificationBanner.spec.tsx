@@ -3,7 +3,7 @@ import type { ComponentProps } from "react"
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ClineAuthProvider } from "@/context/ClineAuthContext"
-import Announcement from "../Announcement"
+import NotificationBanner from "../NotificationBanner"
 
 // Mock the VSCode webview toolkit
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
@@ -63,7 +63,7 @@ const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 	return <ClineAuthProvider>{children}</ClineAuthProvider>
 }
 
-describe("Announcement", () => {
+describe("NotificationBanner", () => {
 	const hideAnnouncement = vi.fn()
 
 	beforeEach(() => {
@@ -73,16 +73,16 @@ describe("Announcement", () => {
 	it("renders the announcement with the correct version", () => {
 		render(
 			<TestWrapper>
-				<Announcement hideAnnouncement={hideAnnouncement} version="2.0.0" />
+				<NotificationBanner hideAnnouncement={hideAnnouncement} version="2.0.0" />
 			</TestWrapper>,
 		)
-		expect(screen.getByText(/New in v2.0/)).toBeInTheDocument()
+		expect(screen.getByText(/New in Cline/)).toBeInTheDocument()
 	})
 
 	it("calls hideAnnouncement when close button is clicked", () => {
 		render(
 			<TestWrapper>
-				<Announcement hideAnnouncement={hideAnnouncement} version="2.0.0" />
+				<NotificationBanner hideAnnouncement={hideAnnouncement} version="2.0.0" />
 			</TestWrapper>,
 		)
 		fireEvent.click(screen.getByTestId("close-announcement-button"))

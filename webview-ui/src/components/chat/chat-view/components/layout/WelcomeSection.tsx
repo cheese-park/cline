@@ -1,7 +1,7 @@
 import React from "react"
-import Announcement from "@/components/chat/Announcement"
 import CliInstallBanner, { CURRENT_CLI_BANNER_VERSION } from "@/components/common/CliInstallBanner"
 import InfoBanner, { CURRENT_INFO_BANNER_VERSION } from "@/components/common/InfoBanner"
+import NotificationBanner from "@/components/common/NotificationBanner"
 import HistoryPreview from "@/components/history/HistoryPreview"
 import HomeHeader from "@/components/welcome/HomeHeader"
 import { SuggestedTasks } from "@/components/welcome/SuggestedTasks"
@@ -37,7 +37,7 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 		<div className="flex flex-col flex-1 w-full h-full p-0 m-0">
 			<div className="overflow-y-auto flex flex-col pb-2.5">
 				{shouldShowInfoBanner && <InfoBanner />}
-				{showAnnouncement && <Announcement hideAnnouncement={hideAnnouncement} version={version} />}
+				{showAnnouncement && <NotificationBanner hideAnnouncement={hideAnnouncement} version={version} />}
 				{/* {shouldShowNewModelBanner && <NewModelBanner />} */}
 				{shouldShowCliBanner && <CliInstallBanner />}
 				<HomeHeader shouldShowQuickWins={shouldShowQuickWins} />
