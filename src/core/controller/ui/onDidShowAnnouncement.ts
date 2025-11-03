@@ -15,9 +15,9 @@ export async function onDidShowAnnouncement(controller: Controller, _request: Em
 		const latestAnnouncementId = getLatestAnnouncementId()
 		// Update the lastShownAnnouncementId to the current latestAnnouncementId
 		controller.stateManager.setGlobalState("lastShownAnnouncementId", latestAnnouncementId)
-		return Boolean.create({ value: true })
+		return Boolean.create({ value: false })
 	} catch (error) {
 		console.error("Failed to acknowledge announcement:", error)
-		return Boolean.create({ value: true })
+		return Boolean.create({ value: false })
 	}
 }
