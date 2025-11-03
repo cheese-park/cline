@@ -53,7 +53,7 @@ const Announcement = ({ version, hideAnnouncement }: AnnouncementProps) => {
 				<XIcon />
 			</Button>
 			<h4 style={h4TitleStyle}>
-				🎉{"  "}New in Cline<sup>Jules</sup> v{minorVersion}
+				🎉{"  "}New in Cline<sup>OpenHands</sup> v{minorVersion}
 			</h4>
 			<p style={{ margin: "0 0 8px" }}>
 				<strong>[Bug Fix]</strong> Fixed issue with extension view not properly displaying notification banners on startup
