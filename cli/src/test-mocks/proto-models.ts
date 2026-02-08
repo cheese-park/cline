@@ -1,0 +1,7 @@
+export enum ApiFormat {
+	ANTHROPIC_CHAT = 0,
+	GEMINI_CHAT = 1,
+	OPENAI_CHAT = 2,
+	R1_CHAT = 3,
+	OPENAI_RESPONSES = 4,
+}

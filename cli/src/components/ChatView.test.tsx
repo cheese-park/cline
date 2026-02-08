@@ -9,10 +9,29 @@ import { Text } from "ink"
 import { render } from "ink-testing-library"
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+vi.mock("@shared/proto/cline/common", () => ({
+	EmptyRequest: { create: (data: unknown) => data || {} },
+	StringRequest: { create: (data: unknown) => data || {} },
+}))
+
+vi.mock("@shared/storage", () => ({
+	getProviderDefaultModelId: () => "claude-sonnet-4-20250514",
+	getProviderModelIdKey: () => "actModeApiModelId",
+}))
+
+vi.mock("@shared/proto/cline/slash", () => ({
+	SlashCommandInfo: {},
+}))
+
+vi.mock("./ModelPicker", () => ({
+	providerModels: {},
+}))
+
 import { ChatView } from "./ChatView"
 
 // Helper to wait for async state updates
-const delay = (ms: number = 60) => new Promise((resolve) => setTimeout(resolve, ms))
+const delay = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // Type for our exit mock function
 type ExitMockFn = ReturnType<typeof vi.fn> & (() => void)
@@ -52,6 +71,7 @@ vi.mock("../context/TaskContext", () => ({
 	})),
 	useTaskContext: vi.fn(() => ({
 		controller: null,
+		clearState: vi.fn(),
 	})),
 }))
 
@@ -90,7 +110,8 @@ vi.mock("./AsciiMotionCli", () => ({
 }))
 
 vi.mock("./ChatMessage", () => ({
-	ChatMessage: ({ message }: { message?: { ts?: number } }) => React.createElement(Text, null, `Message: ${message?.ts}`),
+	ChatMessage: ({ message }: { message?: { ts?: number; text?: string } }) =>
+		React.createElement(Text, null, `Message: ${message?.ts}${message?.text ? ` ${message.text}` : ""}`),
 }))
 
 vi.mock("./FileMentionMenu", () => ({
@@ -314,5 +335,296 @@ describe("ChatView UI State During Exit", () => {
 		expect(frameAfter).toContain("Auto-approve")
 		// Input should be hidden
 		expect(frameAfter).not.toContain("Input:")
+	})
+})
+
+describe("ChatView Streaming Messages", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		shutdownMockState.reset()
+	})
+
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	it("should display streaming messages", async () => {
+		const { useTaskState } = await import("../context/TaskContext")
+		vi.mocked(useTaskState).mockReturnValue({
+			clineMessages: [
+				{
+					ts: 1000,
+					type: "say",
+					say: "text",
+					text: "Hello",
+					partial: true,
+				},
+			],
+			mode: "act",
+		})
+
+		const { lastFrame } = render(<ChatView />)
+		await delay()
+
+		const frame = lastFrame()
+		expect(frame).toContain("Hello")
+	})
+})
+
+describe("ChatView Input Submission", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		shutdownMockState.reset()
+	})
+
+	it("should call controller.initTask when submitting text input", async () => {
+		const mockInitTask = vi.fn().mockResolvedValue(undefined)
+		const mockController = {
+			initTask: mockInitTask,
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin } = render(<ChatView controller={mockController} />)
+
+		// Type some text
+		stdin.write("Hello, Cline!")
+		await delay(50)
+
+		// Press Enter to submit
+		stdin.write("\r")
+		await delay(200)
+
+		// Verify initTask was called with the text
+		expect(mockInitTask).toHaveBeenCalledWith("Hello, Cline!", undefined)
+	})
+
+	it("should not submit when input is empty", async () => {
+		const mockInitTask = vi.fn().mockResolvedValue(undefined)
+		const mockController = {
+			initTask: mockInitTask,
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin } = render(<ChatView controller={mockController} />)
+
+		// Press Enter without typing anything
+		stdin.write("\r")
+		await delay(200)
+
+		// Verify initTask was NOT called
+		expect(mockInitTask).not.toHaveBeenCalled()
+	})
+
+	it("should clear input after successful submission", async () => {
+		const mockInitTask = vi.fn().mockResolvedValue(undefined)
+		const mockController = {
+			initTask: mockInitTask,
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin, lastFrame } = render(<ChatView controller={mockController} />)
+
+		// Type text
+		stdin.write("test task")
+		await delay(50)
+		expect(lastFrame()).toContain("test task")
+
+		// Submit
+		stdin.write("\r")
+		await vi.waitFor(
+			() => {
+				expect(lastFrame()).not.toContain("test task")
+			},
+			{ timeout: 2000 },
+		)
+	})
+})
+
+describe("ChatView Mode Toggle", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		shutdownMockState.reset()
+	})
+
+	it("should toggle from act to plan mode when Tab is pressed", async () => {
+		const mockTogglePlanActMode = vi.fn().mockResolvedValue(undefined)
+		const mockController = {
+			togglePlanActMode: mockTogglePlanActMode,
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin, lastFrame } = render(<ChatView controller={mockController} />)
+
+		// Initially in Act mode
+		const initialFrame = lastFrame()
+		expect(initialFrame).toContain("Act")
+
+		// Press Tab to toggle mode
+		stdin.write("\t")
+		await delay(200)
+
+		// Verify togglePlanActMode was called with "plan"
+		expect(mockTogglePlanActMode).toHaveBeenCalledWith("plan")
+	})
+
+	it("should toggle from plan to act mode with input text", async () => {
+		const { useTaskState } = await import("../context/TaskContext")
+		vi.mocked(useTaskState).mockReturnValue({
+			clineMessages: [],
+			mode: "plan",
+		})
+
+		const mockTogglePlanActMode = vi.fn().mockResolvedValue(undefined)
+		const mockController = {
+			togglePlanActMode: mockTogglePlanActMode,
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin } = render(<ChatView controller={mockController} />)
+
+		// Type some text
+		stdin.write("implement feature X")
+		await delay(50)
+
+		// Press Tab to toggle (from plan to act)
+		stdin.write("\t")
+		await delay(200)
+
+		// Verify togglePlanActMode was called with "act" and the message
+		expect(mockTogglePlanActMode).toHaveBeenCalledWith("act", {
+			message: "implement feature X",
+		})
+	})
+})
+
+describe("ChatView Slash Command Menu", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+		shutdownMockState.reset()
+	})
+
+	it("should show slash menu when typing /", async () => {
+		const { extractSlashQuery } = await import("../utils/slash-commands")
+		const { getAvailableSlashCommands } = await import("@/core/controller/slash/getAvailableSlashCommands")
+
+		const mockCommands = [
+			{ name: "help", description: "Show help", section: "default", cliCompatible: true },
+			{ name: "settings", description: "Open settings", section: "default", cliCompatible: true },
+		]
+
+		vi.mocked(getAvailableSlashCommands).mockResolvedValue({ commands: mockCommands })
+		vi.mocked(extractSlashQuery).mockImplementation((text, _pos) => {
+			if (text === "/") {
+				return { inSlashMode: true, query: "", slashIndex: 0 }
+			}
+			return { inSlashMode: false, query: "", slashIndex: -1 }
+		})
+
+		const mockController = {
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin, lastFrame } = render(<ChatView controller={mockController} />)
+
+		// Wait for commands to load
+		await delay(100)
+
+		// Type /
+		stdin.write("/")
+		await delay(100)
+
+		// Slash menu should be visible
+		expect(lastFrame()).toContain("SlashMenu")
+	})
+
+	it("should navigate slash menu with arrow keys", async () => {
+		const { extractSlashQuery, filterCommands } = await import("../utils/slash-commands")
+		const { getAvailableSlashCommands } = await import("@/core/controller/slash/getAvailableSlashCommands")
+
+		const mockCommands = [
+			{ name: "help", description: "Show help", section: "default", cliCompatible: true },
+			{ name: "settings", description: "Open settings", section: "default", cliCompatible: true },
+			{ name: "clear", description: "Clear screen", section: "default", cliCompatible: true },
+		]
+
+		vi.mocked(getAvailableSlashCommands).mockResolvedValue({ commands: mockCommands })
+		vi.mocked(extractSlashQuery).mockReturnValue({ inSlashMode: true, query: "", slashIndex: 0 })
+		vi.mocked(filterCommands).mockReturnValue(mockCommands)
+
+		const mockController = {
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin, lastFrame } = render(<ChatView controller={mockController} />)
+
+		// Wait for commands to load
+		await delay(100)
+
+		// Type /
+		stdin.write("/")
+		await delay(100)
+
+		// Press down arrow to navigate menu (tests menu navigation logic)
+		stdin.write("\x1B[B")
+		await delay(50)
+
+		// Press up arrow
+		stdin.write("\x1B[A")
+		await delay(50)
+
+		// Menu should still be visible
+		expect(lastFrame()).toContain("SlashMenu")
+	})
+
+	it("should handle /clear command", async () => {
+		const { extractSlashQuery, filterCommands, insertSlashCommand } = await import("../utils/slash-commands")
+		const { getAvailableSlashCommands } = await import("@/core/controller/slash/getAvailableSlashCommands")
+
+		const mockCommands = [{ name: "clear", description: "Clear screen", section: "default", cliCompatible: true }]
+
+		vi.mocked(getAvailableSlashCommands).mockResolvedValue({ commands: mockCommands })
+		vi.mocked(extractSlashQuery).mockReturnValue({ inSlashMode: true, query: "", slashIndex: 0 })
+		vi.mocked(filterCommands).mockReturnValue(mockCommands)
+		vi.mocked(insertSlashCommand).mockReturnValue("/clear ")
+
+		const mockClearTask = vi.fn().mockResolvedValue(undefined)
+		const mockPostStateToWebview = vi.fn()
+		const mockController = {
+			clearTask: mockClearTask,
+			postStateToWebview: mockPostStateToWebview,
+			getWorkspaceManagerSync: vi.fn(() => ({
+				getPrimaryRoot: vi.fn(() => ({ path: "/test/workspace" })),
+			})),
+		}
+
+		const { stdin } = render(<ChatView controller={mockController} />)
+
+		// Wait for commands to load
+		await delay(100)
+
+		// Type /
+		stdin.write("/")
+		await delay(100)
+
+		// Press Enter to select /clear
+		stdin.write("\r")
+		await delay(200)
+
+		// clearTask should be called
+		expect(mockClearTask).toHaveBeenCalled()
 	})
 })

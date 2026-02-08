@@ -24,7 +24,7 @@ vi.mock("@/core/controller/task/showTaskWithId", () => ({
 
 vi.mock("@/shared/proto/cline/common", () => ({
 	StringRequest: {
-		create: (data: any) => data,
+		create: (data: unknown) => data || {},
 	},
 }))
 
