@@ -10,7 +10,7 @@ import {
 	type ToolApprovalResult,
 	type UserInstructionConfigService,
 } from "@cline/core";
-import type { Message } from "@cline/shared";
+import type { Message, MessageWithMetadata } from "@cline/shared";
 import { createCliCore } from "../../session/session";
 import { submitAndExitInTerminal } from "../../utils/approval";
 import type {
@@ -22,6 +22,16 @@ import { setActiveCliSession } from "../../utils/output";
 import { loadInteractiveResumeMessages } from "../../utils/resume";
 import type { Config } from "../../utils/types";
 import { markAbortInProgress } from "../active-runtime";
+import {
+	buildRecallInjection,
+	drainPendingExtraction,
+	getMemoryDir,
+	initExtractMemories,
+	resetSessionMemoryState,
+	shouldExtractSessionMemory,
+	triggerExtractMemories,
+	triggerSessionMemoryExtraction,
+} from "../memory";
 import type {
 	PendingPromptSnapshot,
 	PendingPromptSubmittedEvent,
@@ -199,6 +209,9 @@ export function createInteractiveSessionRuntime(input: {
 		}
 		startupPromise = (async () => {
 			const manager = await ensureSessionManager();
+			// Initialize memory state for this interactive session
+			initExtractMemories();
+			resetSessionMemoryState();
 			const initialMessages = await loadInteractiveResumeMessages(
 				manager,
 				input.resumeSessionId,
@@ -292,10 +305,48 @@ export function createInteractiveSessionRuntime(input: {
 				? startupError
 				: new Error("interactive session manager is unavailable");
 		}
-		return await sessionManager.send({
+
+		// Inject relevant memories from previous sessions into the prompt (best-effort)
+		let enhancedPrompt = turnInput.prompt;
+		try {
+			const recallInjection = await buildRecallInjection(
+				turnInput.prompt ?? "",
+				getMemoryDir(input.config.cwd),
+				input.config,
+			);
+			if (recallInjection) {
+				enhancedPrompt = `${recallInjection}\n\n${turnInput.prompt ?? ""}`;
+			}
+		} catch {
+			// best-effort
+		}
+
+		const result = await sessionManager.send({
 			sessionId: activeSessionId,
 			...turnInput,
+			prompt: enhancedPrompt,
 		});
+
+		// After each turn, check and trigger session memory update (best-effort)
+		try {
+			const messages = await sessionManager
+				.readMessages(activeSessionId)
+				.catch(() => [] as Message[]);
+			if (
+				messages.length > 0 &&
+				shouldExtractSessionMemory(messages as MessageWithMetadata[])
+			) {
+				void triggerSessionMemoryExtraction(
+					activeSessionId,
+					messages as MessageWithMetadata[],
+					input.config,
+				);
+			}
+		} catch {
+			// best-effort
+		}
+
+		return result;
 	};
 
 	const updatePendingPrompt = async (input: {
@@ -513,6 +564,22 @@ export function createInteractiveSessionRuntime(input: {
 				unsubscribeAgent();
 				unsubscribePendingPrompts();
 			}
+			// Trigger memory extraction for the completed session (fire-and-forget)
+			if (sessionManager && activeSessionId) {
+				const messages = await sessionManager
+					.readMessages(activeSessionId)
+					.catch(() => [] as Message[]);
+				if (messages.length > 0) {
+					void triggerExtractMemories({
+						config: input.config,
+						memoryDir: getMemoryDir(input.config.cwd),
+						sessionId: activeSessionId,
+						messages: messages as MessageWithMetadata[],
+					});
+				}
+			}
+			// Wait for any in-flight memory extraction before shutting down
+			await drainPendingExtraction(60_000);
 			try {
 				exitSummary = await getExitSummary();
 				await stopCurrentSession();

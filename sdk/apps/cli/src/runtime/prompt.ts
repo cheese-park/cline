@@ -7,6 +7,8 @@ import {
 	type UserInstructionConfigService,
 } from "@cline/core";
 import { type AgentMode, buildClineSystemPrompt } from "@cline/shared";
+import { getMemoryDir } from "./memory/paths";
+import { buildMemorySystemPrompt } from "./memory/system-prompt";
 import { isImagePath, loadImageAsDataUrl } from "../utils/image-attachments";
 
 const PLAN_MODE_INSTRUCTIONS = `# Plan Mode
@@ -17,8 +19,9 @@ You are in Plan mode. Your role is to explore, analyze, and plan -- not to execu
 - Ask clarifying questions when requirements are ambiguous
 - Present your plan as a structured outline with clear steps
 - Explain tradeoffs between different approaches when they exist
-- Do NOT edit files, write code, run destructive commands, or make any changes
 - Do NOT implement anything -- focus on understanding and alignment first
+- Writing to the memory directory at \`.cline/memory/\` is ALLOWED even in Plan mode — save important context, user preferences, and project knowledge for future sessions
+- Do NOT edit any other files, write other code, or run destructive commands
 
 When the user aligns on a plan and is ready to proceed, use the switch_to_act_mode tool to switch to act mode and begin implementation.`;
 
@@ -30,7 +33,8 @@ export async function resolveSystemPrompt(input: {
 	mode?: AgentMode;
 }): Promise<string> {
 	const metadata = await buildWorkspaceMetadata(input.cwd);
-	let rules = mergeRulesForSystemPrompt(undefined, input.rules);
+	const memorySection = await buildMemorySystemPrompt(getMemoryDir(input.cwd));
+	let rules = mergeRulesForSystemPrompt(input.rules, memorySection);
 	if (input.mode === "plan") {
 		rules = rules
 			? `${rules}\n\n${PLAN_MODE_INSTRUCTIONS}`

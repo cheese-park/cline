@@ -35,6 +35,16 @@ import {
 	CLI_DEFAULT_LOOP_DETECTION,
 } from "./defaults";
 import { describeAbortSource, resolveMistakeLimitDecision } from "./format";
+import {
+	buildRecallInjection,
+	drainPendingExtraction,
+	getMemoryDir,
+	initExtractMemories,
+	resetSessionMemoryState,
+	shouldExtractSessionMemory,
+	triggerExtractMemories,
+	triggerSessionMemoryExtraction,
+} from "./memory";
 import { buildUserInputMessage } from "./prompt";
 import { subscribeToAgentEvents } from "./session-events";
 
@@ -200,6 +210,10 @@ export async function runAgent(
 		}
 		handleEvent(event, config);
 	};
+	// Initialize memory state for this run
+	initExtractMemories();
+	resetSessionMemoryState();
+
 	const plannedSessionId = createSessionId();
 	const unsubscribe = subscribeToAgentEvents(sessionManager, onAgentEvent, {
 		sessionId: plannedSessionId,
@@ -266,6 +280,22 @@ export async function runAgent(
 			userImages,
 			userFiles,
 		} = await buildUserInputMessage(prompt, userInstructionService);
+
+		// Inject relevant memories from previous sessions (best-effort)
+		let enhancedPrompt = userInput;
+		try {
+			const recallInjection = await buildRecallInjection(
+				userInput,
+				getMemoryDir(config.cwd),
+				config,
+			);
+			if (recallInjection) {
+				enhancedPrompt = `${recallInjection}\n\n${userInput}`;
+			}
+		} catch {
+			// best-effort
+		}
+
 		const started = await sessionManager.start({
 			source: SessionSource.CLI,
 			config: {
@@ -283,7 +313,7 @@ export async function runAgent(
 					context: ConsecutiveMistakeLimitContext,
 				) => resolveMistakeLimitDecision(config, context),
 			},
-			prompt: userInput,
+			prompt: enhancedPrompt,
 			userImages: userImages.length > 0 ? userImages : undefined,
 			userFiles: userFiles.length > 0 ? userFiles : undefined,
 			interactive: false,
@@ -326,7 +356,7 @@ export async function runAgent(
 			result = await sessionManager
 				.send({
 					sessionId: started.sessionId,
-					prompt: userInput,
+					prompt: enhancedPrompt,
 					userImages: userImages.length > 0 ? userImages : undefined,
 					userFiles: userFiles.length > 0 ? userFiles : undefined,
 				})
@@ -334,6 +364,31 @@ export async function runAgent(
 		}
 		if (!result) {
 			throw new Error("session manager did not return a result");
+		}
+
+		// Trigger memory extraction (fire-and-forget; drained in finally)
+		if (result.messages.length > 0) {
+			void triggerExtractMemories({
+				config,
+				memoryDir: getMemoryDir(config.cwd),
+				sessionId: started.sessionId,
+				messages: result.messages,
+			});
+		}
+
+		// Trigger session memory update (best-effort, fire-and-forget)
+		if (result.messages.length > 0) {
+			try {
+				if (shouldExtractSessionMemory(result.messages)) {
+					void triggerSessionMemoryExtraction(
+						started.sessionId,
+						result.messages,
+						config,
+					);
+				}
+			} catch {
+				// best-effort
+			}
 		}
 
 		const usageSummary = await sessionManager.getAccumulatedUsage(
@@ -401,6 +456,8 @@ export async function runAgent(
 		writeErr(message);
 		process.exitCode = 1;
 	} finally {
+		// Wait for any in-flight memory extraction before shutting down
+		await drainPendingExtraction(60_000);
 		await cleanupRuntime();
 	}
 }
